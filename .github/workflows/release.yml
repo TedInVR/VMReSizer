@@ -1,0 +1,38 @@
+name: Build, test and release macOS app
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: vmresizer-release
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test real image exports and update safeguards
+        run: bash scripts/test.sh
+      - name: Build universal app and verify signature
+        run: bash scripts/build.sh
+      - name: Keep build for inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: VM-Re-Sizer-macOS
+          path: |
+            build/VM-Re-Sizer-macOS.zip
+            build/SHA256SUMS
+      - name: Publish immutable versioned release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Info.plist)
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "Release v$VERSION already exists; increment the version for a new update."
+            exit 0
+          fi
+          gh release create "v$VERSION" --target "$GITHUB_SHA" --title "VM Re-Sizer $VERSION" --notes-file RELEASE_NOTES.md --draft build/VM-Re-Sizer-macOS.zip build/SHA256SUMS
+          gh release edit "v$VERSION" --draft=false --latest
