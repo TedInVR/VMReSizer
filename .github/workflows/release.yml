@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   release:
-    runs-on: macos-14
+    runs-on: macos-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -36,3 +36,4 @@ jobs:
           fi
           gh release create "v$VERSION" --target "$GITHUB_SHA" --title "VM Re-Sizer $VERSION" --notes-file RELEASE_NOTES.md --draft build/VM-Re-Sizer-macOS.zip build/SHA256SUMS
           gh release edit "v$VERSION" --draft=false --latest
+
