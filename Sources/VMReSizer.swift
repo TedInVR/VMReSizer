@@ -97,8 +97,8 @@ final class StereoModel: ObservableObject {
     func export() {
         guard let l = left, let r = right, let sourceURL = sourceURL else { return }
         guard nativeExport || image3DExport else { report("Choose at least one output size."); return }
-        let sizes: [(String, ChipSize)] = (nativeExport ? [("FullResolution", nativeSize)] : []) +
-            (image3DExport ? [("Image3D", ChipSize(width: 1112, height: 955))] : [])
+        let sizes: [(String, ChipSize)] = (nativeExport ? [("Full_Resolution", nativeSize)] : []) +
+            (image3DExport ? [("Ready_for_Image3D", ChipSize(width: 1112, height: 955))] : [])
         guard sizes.allSatisfy({ Double($0.1.width) * Double($0.1.height) <= 100_000_000 }) else {
             report("This zoom would create an output larger than 100 megapixels per eye. Increase the zoom or choose only the Image3D output.")
             return
