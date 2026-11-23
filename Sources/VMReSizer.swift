@@ -19,6 +19,7 @@ final class StereoModel: ObservableObject {
     @Published var swapped = false
     @Published var nativeExport = true
     @Published var image3DExport = true
+    @Published var myOwnReelExport = true
     @Published var format = 0
     @Published var status = "Import a full-width side-by-side stereo pair to begin."
     @Published var busy = false
@@ -96,17 +97,19 @@ final class StereoModel: ObservableObject {
 
     func export() {
         guard let l = left, let r = right, let sourceURL = sourceURL else { return }
-        guard nativeExport || image3DExport else { report("Choose at least one output size."); return }
+        guard nativeExport || image3DExport || myOwnReelExport else { report("Choose at least one export option."); return }
         let sizes: [(String, ChipSize)] = (nativeExport ? [("Full_Resolution", nativeSize)] : []) +
             (image3DExport ? [("Ready_for_Image3D", ChipSize(width: 1112, height: 955))] : [])
-        guard sizes.allSatisfy({ Double($0.1.width) * Double($0.1.height) <= 100_000_000 }) else {
-            report("This zoom would create an output larger than 100 megapixels per eye. Increase the zoom or choose only the Image3D output.")
+        let pairSize = nativeSize
+        let exportPair = myOwnReelExport
+        guard (!exportPair || Double(pairSize.width) * Double(pairSize.height) * 2 <= 100_000_000), sizes.allSatisfy({ Double($0.1.width) * Double($0.1.height) <= 100_000_000 }) else {
+            report("This zoom would create an output larger than 100 megapixels. Increase the zoom or choose only the Image3D output.")
             return
         }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true; panel.canChooseFiles = false
         panel.canCreateDirectories = true
-        panel.prompt = "Export Both Eyes"
+        panel.prompt = "Export"
         panel.directoryURL = sourceURL.deletingLastPathComponent()
         guard panel.runModal() == .OK, let parent = panel.url else { return }
         let stem = sourceURL.deletingPathExtension().lastPathComponent
@@ -133,10 +136,15 @@ final class StereoModel: ObservableObject {
                                        format: currentFormat, url: staging.appendingPathComponent(name))
                     }
                 }
+                if exportPair {
+                    let name = "\(stem)_Ready_for_MyOwnReel.\(currentFormat == 0 ? "jpg" : "png")"
+                    try Self.write(images, size: pairSize, zoom: currentZoom, color: color,
+                                   format: currentFormat, url: staging.appendingPathComponent(name))
+                }
                 try FileManager.default.moveItem(at: staging, to: destination)
                 DispatchQueue.main.async {
                     self.busy = false
-                    self.status = "Exported \(sizes.count * 2) images to \(destination.lastPathComponent)."
+                    self.status = "Exported \(sizes.count * 2 + (exportPair ? 1 : 0)) images to \(destination.lastPathComponent)."
                 }
             } catch {
                 try? FileManager.default.removeItem(at: staging)
@@ -149,18 +157,28 @@ final class StereoModel: ObservableObject {
     }
 
     static func write(_ image: CGImage, size: ChipSize, zoom: Double, color: CGColor, format: Int, url: URL) throws {
+        try write([image], size: size, zoom: zoom, color: color, format: format, url: url)
+    }
+
+    static func write(_ images: [CGImage], size: ChipSize, zoom: Double, color: CGColor, format: Int, url: URL) throws {
         guard let space = CGColorSpace(name: CGColorSpace.sRGB),
-              let context = CGContext(data: nil, width: size.width, height: size.height,
+              let context = CGContext(data: nil, width: size.width * images.count, height: size.height,
                                       bitsPerComponent: 8, bytesPerRow: 0, space: space,
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
             throw AppError.message("Not enough memory to render this output size.")
         }
         context.setFillColor(color)
-        context.fill(CGRect(x: 0, y: 0, width: size.width, height: size.height))
-        let s = min(Double(size.width) / Double(image.width), Double(size.height) / Double(image.height)) * zoom
-        let w = Double(image.width) * s, h = Double(image.height) * s
-        context.interpolationQuality = .high
-        context.draw(image, in: CGRect(x: (Double(size.width)-w)/2, y: (Double(size.height)-h)/2, width: w, height: h))
+        context.fill(CGRect(x: 0, y: 0, width: size.width * images.count, height: size.height))
+        for (eye, image) in images.enumerated() {
+            context.saveGState()
+            context.translateBy(x: CGFloat(eye * size.width), y: 0)
+            context.clip(to: CGRect(x: 0, y: 0, width: size.width, height: size.height))
+            let s = min(Double(size.width) / Double(image.width), Double(size.height) / Double(image.height)) * zoom
+            let w = Double(image.width) * s, h = Double(image.height) * s
+            context.interpolationQuality = .high
+            context.draw(image, in: CGRect(x: (Double(size.width)-w)/2, y: (Double(size.height)-h)/2, width: w, height: h))
+            context.restoreGState()
+        }
         guard let rendered = context.makeImage(),
               let output = CGImageDestinationCreateWithURL(url as CFURL, (format == 0 ? UTType.jpeg.identifier : UTType.png.identifier) as CFString, 1, nil) else {
             throw AppError.message("The output file could not be created.")
@@ -263,6 +281,7 @@ struct ContentView: View {
                 Toggle("Full resolution — retain source detail", isOn: $model.nativeExport).toggleStyle(.checkbox)
                 Text(model.outputDescription).font(.caption).foregroundColor(.secondary).padding(.leading, 20)
                 Toggle("Image3D — 1112 × 955 pixels per eye", isOn: $model.image3DExport).toggleStyle(.checkbox)
+                Toggle("MyOwnReel — full-resolution side-by-side pair", isOn: $model.myOwnReelExport).toggleStyle(.checkbox)
                 HStack {
                     Picker("File format", selection: $model.format) {
                         Text("JPEG · maximum quality").tag(0)
@@ -270,10 +289,10 @@ struct ContentView: View {
                     }.frame(width: 285)
                     Spacer()
                     if model.busy { ProgressView().controlSize(.small) }
-                    Button("Export Both Eyes…") { model.export() }
-                        .keyboardShortcut("e").disabled(model.left == nil || (!model.nativeExport && !model.image3DExport))
+                    Button("Export…") { model.export() }
+                        .keyboardShortcut("e").disabled(model.left == nil || (!model.nativeExport && !model.image3DExport && !model.myOwnReelExport))
                 }
-                Text("Choose either size or both. Each export gets a new folder; existing files are never overwritten.")
+                Text("Choose any combination. MyOwnReel places the left eye first and retains your framing. Each export gets a new folder; existing files are never overwritten.")
                     .font(.caption).foregroundColor(.secondary)
             }
             .padding(16).background(Color.green.opacity(0.07)).cornerRadius(12)
@@ -308,7 +327,7 @@ struct VMReSizerApp: App {
                 Button("Zoom In") { model.changeZoom(1.01) }.keyboardShortcut("+")
                 Button("Zoom Out") { model.changeZoom(1/1.01) }.keyboardShortcut("-")
                 Divider()
-                Button("Export Both Eyes…") { model.export() }.keyboardShortcut("e").disabled(model.left == nil || model.busy)
+                Button("Export…") { model.export() }.keyboardShortcut("e").disabled(model.left == nil || model.busy)
             }
             CommandGroup(replacing: .help) {
                 Button("Keyboard Shortcuts") {

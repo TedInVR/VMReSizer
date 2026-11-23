@@ -1,10 +1,5 @@
-VM Re-Sizer 0.2.1
+VM Re-Sizer 0.2.2
 
-Exported filenames now keep the original photo name and use these exact suffixes:
+Adds a MyOwnReel export checkbox, enabled initially. It creates one full-resolution parallel side-by-side file named Photo_Ready_for_MyOwnReel.jpg (or .png), with the left eye first. It uses the current crop, zoom, background and eye-swap setting. Per-eye proportions match the app preview. Existing individual-eye output options can be selected alongside it.
 
-- _Full_Resolution_Left / _Full_Resolution_Right
-- _Ready_for_Image3D_Left / _Ready_for_Image3D_Right
-
-The selected .jpg or .png extension is appended. No "masked" label is added.
-
-Install through Help > Check for Updates, then quit the app to let the queued update install. Automatic updates also install while the app is closed.
+Install through Help > Check for Updates, then quit to install.

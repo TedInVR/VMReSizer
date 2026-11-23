@@ -63,6 +63,26 @@ struct Tests {
                 check(corner.blueComponent > 0.9, "square corners preserve padding")
             }
         }
+        // Different eye colors expose ordering and cross-eye bleed when zoomed.
+        ctx.setFillColor(NSColor.blue.cgColor)
+        ctx.fill(CGRect(x: 0, y: 0, width: 400, height: 200))
+        let blueEye = ctx.makeImage()!
+        for zoom in [0.5, 1.0, 3.0] {
+            let size = ChipSize(width: 200, height: 172)
+            let file = temp.appendingPathComponent("pair-\(zoom).png")
+            try StereoModel.write([image, blueEye], size: size, zoom: zoom,
+                                  color: NSColor.black.cgColor, format: 1, url: file)
+            let result = CGImageSourceCreateImageAtIndex(CGImageSourceCreateWithURL(file as CFURL, nil)!, 0, nil)!
+            check(result.width == 400 && result.height == 172, "SBS dimensions")
+            let rep = NSBitmapImageRep(cgImage: result)
+            let leftCenter = rep.colorAt(x: 100, y: 96)!.usingColorSpace(.sRGB)!
+            let rightCenter = rep.colorAt(x: 300, y: 96)!.usingColorSpace(.sRGB)!
+            check(leftCenter.blueComponent < 0.05 && rightCenter.blueComponent > 0.9, "SBS left/right order")
+            if zoom == 3 {
+                let seam = rep.colorAt(x: 201, y: 96)!.usingColorSpace(.sRGB)!
+                check(seam.blueComponent > 0.9, "zoom clips each eye independently")
+            }
+        }
         let target = temp.appendingPathComponent("Original.app")
         let next = temp.appendingPathComponent("Next.app")
         try FileManager.default.createDirectory(at: target, withIntermediateDirectories: false)
