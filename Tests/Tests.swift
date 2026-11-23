@@ -83,6 +83,41 @@ struct Tests {
                 check(seam.blueComponent > 0.9, "zoom clips each eye independently")
             }
         }
+        // A narrow marker checks disparity direction and identical chip/SBS transforms.
+        ctx.setFillColor(NSColor.black.cgColor)
+        ctx.fill(CGRect(x: 0, y: 0, width: 400, height: 200))
+        ctx.setFillColor(NSColor.white.cgColor)
+        ctx.fill(CGRect(x: 196, y: 0, width: 8, height: 200))
+        let marker = ctx.makeImage()!
+        for depth in [-0.1, 0.0, 0.1] {
+            let size = ChipSize(width: 200, height: 172)
+            let pair = temp.appendingPathComponent("window-\(depth).png")
+            try StereoModel.write([marker, marker], size: size, zoom: 1,
+                                  stereoWindow: depth, color: NSColor.black.cgColor, format: 1, url: pair)
+            let pairImage = CGImageSourceCreateImageAtIndex(CGImageSourceCreateWithURL(pair as CFURL, nil)!, 0, nil)!
+            let pairRep = NSBitmapImageRep(cgImage: pairImage)
+            for eye in 0...1 {
+                let shift = (eye == 0 ? 1.0 : -1.0) * depth / 2
+                let chip = temp.appendingPathComponent("window-\(depth)-\(eye).png")
+                try StereoModel.write(marker, size: size, zoom: 1, horizontalShift: shift,
+                                      color: NSColor.black.cgColor, format: 1, url: chip)
+                let chipImage = CGImageSourceCreateImageAtIndex(CGImageSourceCreateWithURL(chip as CFURL, nil)!, 0, nil)!
+                let chipRep = NSBitmapImageRep(cgImage: chipImage)
+                var total = 0.0, weighted = 0.0
+                for x in 0..<200 {
+                    let value = chipRep.colorAt(x: x, y: 86)!.usingColorSpace(.sRGB)!.redComponent
+                    let packed = pairRep.colorAt(x: eye * 200 + x, y: 86)!.usingColorSpace(.sRGB)!.redComponent
+                    check(abs(value - packed) < 0.01, "chip and SBS stereo window match")
+                    total += value; weighted += Double(x) * value
+                }
+                check(total > 0 && abs(weighted / total - (99.5 + shift * 200)) < 1,
+                      "push back and pull forward disparity direction")
+            }
+        }
+        model.stereoWindow = 0.2; model.changeWindow(0.002)
+        check(model.stereoWindow == 0.2, "forward window limit")
+        model.stereoWindow = -0.2; model.changeWindow(-0.002)
+        check(model.stereoWindow == -0.2, "back window limit")
         let target = temp.appendingPathComponent("Original.app")
         let next = temp.appendingPathComponent("Next.app")
         try FileManager.default.createDirectory(at: target, withIntermediateDirectories: false)

@@ -15,6 +15,7 @@ final class StereoModel: ObservableObject {
     @Published var right: CGImage?
     @Published var sourceURL: URL?
     @Published var zoom: Double = 1
+    @Published var stereoWindow: Double = 0
     @Published var background = Color.black
     @Published var swapped = false
     @Published var nativeExport = true
@@ -82,7 +83,7 @@ final class StereoModel: ObservableObject {
                   let r = image.cropping(to: CGRect(x: half, y: 0, width: half, height: image.height)) else {
                 throw AppError.message("The stereo pair could not be split.")
             }
-            left = l; right = r; sourceURL = url; zoom = 1; swapped = false
+            left = l; right = r; sourceURL = url; zoom = 1; stereoWindow = 0; swapped = false
             status = "\(url.lastPathComponent) • \(half) × \(image.height) per eye"
         } catch { report(error.localizedDescription) }
     }
@@ -92,6 +93,8 @@ final class StereoModel: ObservableObject {
         let w = Double(image.width), h = Double(image.height)
         zoom = max(frameRatio / w, 1 / h) / min(frameRatio / w, 1 / h)
     }
+
+    func changeWindow(_ amount: Double) { stereoWindow = min(0.2, max(-0.2, stereoWindow + amount)) }
 
     func changeZoom(_ factor: Double) { zoom = min(16, max(0.05, zoom * factor)) }
 
@@ -122,7 +125,7 @@ final class StereoModel: ObservableObject {
         let images = swapped ? [r, l] : [l, r]
         let bg = NSColor(background).usingColorSpace(.sRGB) ?? .black
         let color = CGColor(srgbRed: bg.redComponent, green: bg.greenComponent, blue: bg.blueComponent, alpha: 1)
-        let currentZoom = zoom, currentFormat = format
+        let currentZoom = zoom, currentFormat = format, currentWindow = stereoWindow
         busy = true
         status = "Exporting…"
         DispatchQueue.global(qos: .userInitiated).async {
@@ -132,13 +135,14 @@ final class StereoModel: ObservableObject {
                 for (label, size) in sizes {
                     for eye in 0...1 {
                         let name = "\(stem)_\(label)_\(eye == 0 ? "Left" : "Right").\(currentFormat == 0 ? "jpg" : "png")"
-                        try Self.write(images[eye], size: size, zoom: currentZoom, color: color,
+                        try Self.write(images[eye], size: size, zoom: currentZoom,
+                                       horizontalShift: (eye == 0 ? 1 : -1) * currentWindow / 2, color: color,
                                        format: currentFormat, url: staging.appendingPathComponent(name))
                     }
                 }
                 if exportPair {
                     let name = "\(stem)_Ready_for_MyOwnReel.\(currentFormat == 0 ? "jpg" : "png")"
-                    try Self.write(images, size: pairSize, zoom: currentZoom, color: color,
+                    try Self.write(images, size: pairSize, zoom: currentZoom, stereoWindow: currentWindow, color: color,
                                    format: currentFormat, url: staging.appendingPathComponent(name))
                 }
                 try FileManager.default.moveItem(at: staging, to: destination)
@@ -156,11 +160,11 @@ final class StereoModel: ObservableObject {
         }
     }
 
-    static func write(_ image: CGImage, size: ChipSize, zoom: Double, color: CGColor, format: Int, url: URL) throws {
-        try write([image], size: size, zoom: zoom, color: color, format: format, url: url)
+    static func write(_ image: CGImage, size: ChipSize, zoom: Double, horizontalShift: Double = 0, color: CGColor, format: Int, url: URL) throws {
+        try write([image], size: size, zoom: zoom, horizontalShift: horizontalShift, color: color, format: format, url: url)
     }
 
-    static func write(_ images: [CGImage], size: ChipSize, zoom: Double, color: CGColor, format: Int, url: URL) throws {
+    static func write(_ images: [CGImage], size: ChipSize, zoom: Double, stereoWindow: Double = 0, horizontalShift: Double = 0, color: CGColor, format: Int, url: URL) throws {
         guard let space = CGColorSpace(name: CGColorSpace.sRGB),
               let context = CGContext(data: nil, width: size.width * images.count, height: size.height,
                                       bitsPerComponent: 8, bytesPerRow: 0, space: space,
@@ -176,7 +180,8 @@ final class StereoModel: ObservableObject {
             let s = min(Double(size.width) / Double(image.width), Double(size.height) / Double(image.height)) * zoom
             let w = Double(image.width) * s, h = Double(image.height) * s
             context.interpolationQuality = .high
-            context.draw(image, in: CGRect(x: (Double(size.width)-w)/2, y: (Double(size.height)-h)/2, width: w, height: h))
+            let shift = images.count == 1 ? horizontalShift : (eye == 0 ? 1 : -1) * stereoWindow / 2
+            context.draw(image, in: CGRect(x: (Double(size.width)-w)/2 + shift * Double(size.width), y: (Double(size.height)-h)/2, width: w, height: h))
             context.restoreGState()
         }
         guard let rendered = context.makeImage(),
@@ -200,6 +205,7 @@ struct EyePreview: View {
     let zoom: Double
     let color: Color
     let label: String
+    let horizontalShift: Double
     var body: some View {
         VStack(spacing: 10) {
             Text(label).font(.headline).foregroundColor(.secondary)
@@ -211,7 +217,7 @@ struct EyePreview: View {
                         Image(decorative: image, scale: 1)
                             .resizable().interpolation(.high)
                             .frame(width: CGFloat(image.width)*s, height: CGFloat(image.height)*s)
-                            .position(x: g.size.width/2, y: g.size.height/2)
+                            .position(x: g.size.width/2 + CGFloat(horizontalShift) * g.size.width, y: g.size.height/2)
                     } else {
                         Text("Import stereo photo").foregroundColor(.gray)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -239,8 +245,8 @@ struct ContentView: View {
                 Button("Import Stereo Pair…") { model.chooseImage() }.keyboardShortcut("o")
             }
             HStack(spacing: 24) {
-                EyePreview(image: model.swapped ? model.right : model.left, zoom: model.zoom, color: model.background, label: "LEFT EYE")
-                EyePreview(image: model.swapped ? model.left : model.right, zoom: model.zoom, color: model.background, label: "RIGHT EYE")
+                EyePreview(image: model.swapped ? model.right : model.left, zoom: model.zoom, color: model.background, label: "LEFT EYE", horizontalShift: model.stereoWindow / 2)
+                EyePreview(image: model.swapped ? model.left : model.right, zoom: model.zoom, color: model.background, label: "RIGHT EYE", horizontalShift: -model.stereoWindow / 2)
             }
             .padding(20)
             .background(Color.black.opacity(0.20))
@@ -256,7 +262,21 @@ struct ContentView: View {
             Text("Curved corners are a preview guide. Exports always have square corners.")
                 .font(.callout).foregroundColor(.secondary)
             VStack(alignment: .leading, spacing: 12) {
-                Text("1  Frame your photo").font(.title3.bold())
+                Text("1  Adjust the stereo window").font(.title3.bold())
+                HStack(spacing: 16) {
+                    Button("Push Back") { model.changeWindow(-0.002) }
+                        .controlSize(.large).frame(minWidth: 120)
+                    Slider(value: $model.stereoWindow, in: -0.2...0.2)
+                        .accessibilityLabel("Stereo window. Left pushes back, right pulls forward.")
+                    Button("Pull Forward") { model.changeWindow(0.002) }
+                        .controlSize(.large).frame(minWidth: 120)
+                }
+                Text("Both eyes move horizontally in opposite directions. The center keeps the original stereo window. Importing a photo resets this adjustment.")
+                    .font(.caption).foregroundColor(.secondary)
+            }
+            .padding(16).background(Color.orange.opacity(0.07)).cornerRadius(12)
+            VStack(alignment: .leading, spacing: 12) {
+                Text("2  Frame your photo").font(.title3.bold())
                 HStack {
                     Button("Fit Entire Image") { model.zoom = 1 }.keyboardShortcut("0")
                     Button("Fill Frame") { model.fill() }
@@ -272,12 +292,12 @@ struct ContentView: View {
                     Spacer()
                     Toggle("Swap left / right", isOn: $model.swapped).toggleStyle(.checkbox)
                 }
-                Text("Both eyes always scale together around their centers. Full-width SBS input; half-width SBS must be expanded first.")
+                Text("Both eyes scale together. Stereo window adjustment remains applied. Full-width SBS input; half-width SBS must be expanded first.")
                     .font(.caption).foregroundColor(.secondary)
             }
             .padding(16).background(Color.blue.opacity(0.07)).cornerRadius(12)
             VStack(alignment: .leading, spacing: 10) {
-                Text("2  Export both eyes").font(.title3.bold())
+                Text("3  Export").font(.title3.bold())
                 Toggle("Full resolution — retain source detail", isOn: $model.nativeExport).toggleStyle(.checkbox)
                 Text(model.outputDescription).font(.caption).foregroundColor(.secondary).padding(.leading, 20)
                 Toggle("Image3D — 1112 × 955 pixels per eye", isOn: $model.image3DExport).toggleStyle(.checkbox)
